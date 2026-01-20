@@ -6,10 +6,8 @@ import datetime
 # Pinecone & Gemini
 from pinecone import Pinecone
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_pinecone import PineconeVectorStore
 import google.generativeai as genai
 import plotly.graph_objects as go  # 멋진 차트 그리는 도구
-from langchain.schema import Document  # Document 클래스 임포트 추가
 
 # =========================
 # 1. 설정 및 초기화
@@ -120,19 +118,13 @@ embeddings = GoogleGenerativeAIEmbeddings(
 )
 
 # Pinecone 연결 (디버깅 정보 추가)
+pinecone_index = None
 try:
-    vectorstore = PineconeVectorStore.from_existing_index(
-        index_name=index_name,
-        embedding=embeddings
-    )
-    
-    # 디버깅: 인덱스 상태 확인
-    index = pc.Index(index_name)
-    stats = index.describe_index_stats()
+    pinecone_index = pc.Index(index_name)
+    stats = pinecone_index.describe_index_stats()
     st.sidebar.success(f"✅ Pinecone 연결 성공: {stats.get('total_vector_count', 0)}개 벡터")
 except Exception as e:
     st.sidebar.error(f"❌ Pinecone 연결 실패: {e}")
-    vectorstore = None
 
 # =========================
 # 4. 메인: 실시간 분석 파트
@@ -182,43 +174,42 @@ with col2:
 
     if st.button("🚀 분석 시작"):
         if not realtime_data:
-            st.warning("먼저 유효한 종목코드를 입력해주세요.")
+            st.warning("먼저 유효한 종목을 선택해주세요.")
             st.stop()
             
         with st.spinner(f"'{stock_name}'의 데이터를 분석하고 교과서를 뒤적이는 중..."):
             
-            # 1️⃣ RAG: 질문과 관련된 투자 이론(Textbook) 검색 (수정된 부분)
-            try:
-                # 쿼리를 임베딩으로 변환
-                query_embedding = embeddings.embed_query(query)
-                
-                # Pinecone에 직접 쿼리
-                index = pc.Index(index_name)
-                results = index.query(
-                    vector=query_embedding,
-                    top_k=3,
-                    include_metadata=True,
-                    namespace=""  # 기본 namespace 사용
-                )
-                
-                # 결과를 LangChain Document 형식으로 변환
-                docs = [
-                    Document(
-                        page_content=match.get('metadata', {}).get('text', ''),
-                        metadata=match.get('metadata', {})
+            # 1️⃣ RAG: 질문과 관련된 투자 이론(Textbook) 검색
+            textbook_context = "특별한 저장된 이론 없음."
+            
+            if pinecone_index:
+                try:
+                    # 쿼리를 임베딩으로 변환 (리스트로 변환)
+                    query_embedding = embeddings.embed_query(query)
+                    
+                    # Pinecone에 직접 쿼리 (벡터를 리스트로 변환)
+                    results = pinecone_index.query(
+                        vector=list(query_embedding),  # 여기가 핵심!
+                        top_k=3,
+                        include_metadata=True
                     )
-                    for match in results.get('matches', [])
-                ]
-                
-                textbook_context = "\n".join([doc.page_content for doc in docs]) if docs else "특별한 저장된 이론 없음."
-                
-            except Exception as e:
-                st.warning(f"투자 이론 검색 중 오류 발생: {e}")
-                textbook_context = "투자 이론을 불러올 수 없습니다. 실시간 데이터만으로 분석합니다."
+                    
+                    # 결과에서 텍스트 추출
+                    texts = []
+                    for match in results.get('matches', []):
+                        metadata = match.get('metadata', {})
+                        if 'text' in metadata:
+                            texts.append(metadata['text'])
+                    
+                    if texts:
+                        textbook_context = "\n\n".join(texts)
+                    
+                except Exception as e:
+                    st.warning(f"투자 이론 검색 중 오류 발생: {e}")
+                    textbook_context = "투자 이론을 불러올 수 없습니다. 실시간 데이터만으로 분석합니다."
 
             # 2️⃣ Prompt Engineering: [실시간 데이터] + [투자 이론] 결합
-            prompt = f"""
-당신은 '수석 주식 애널리스트'입니다. 아래 제공된 [실시간 시장 데이터]와 [투자 이론(Textbook)]을 종합하여 분석 보고서를 작성하세요.
+            prompt = f"""당신은 '수석 주식 애널리스트'입니다. 아래 제공된 [실시간 시장 데이터]와 [투자 이론(Textbook)]을 종합하여 분석 보고서를 작성하세요.
 
 ### 1. 분석 대상
 - 종목명: {stock_name} ({stock_code})
@@ -240,11 +231,13 @@ with col2:
 - **톤앤매너:** 전문적이지만 이해하기 쉽게(초등학생도 이해 가능하게).
 - **필수:** 투자의견(매수/매도/관망)을 낼 때는 반드시 위 [투자 이론]이나 [시장 데이터]를 근거로 들 것.
 """
-            # 3️⃣ Gemini 호출
-            response = gemini_model.generate_content(prompt)
-            
-            # 4️⃣ 결과 출력
-            st.markdown(response.text)
+            # 3️⃣ Gemini 호출 (에러 처리 추가)
+            try:
+                response = gemini_model.generate_content(prompt)
+                st.markdown(response.text)
+            except Exception as e:
+                st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
+                st.info("API 키나 네트워크 연결을 확인해주세요.")
             
             # (옵션) 참고한 이론 보여주기
             with st.expander("📚 분석에 참고한 '투자 교과서' 내용 보기"):

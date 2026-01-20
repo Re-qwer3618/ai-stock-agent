@@ -168,6 +168,10 @@ with col1:
                 value=f"{realtime_data['current_price']:,}원", 
                 delta=f"{realtime_data['change_rate']}%"
             )
+
+            # 🔥 [여기!] 차트 그리기 추가
+            with st.expander("📊 1년 주가 차트 보기 (클릭)", expanded=True):
+                plot_chart(stock_code, stock_name)
         else:
             st.error("데이터를 가져올 수 없습니다.")
 

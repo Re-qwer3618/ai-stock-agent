@@ -4,7 +4,8 @@ from pinecone import Pinecone
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains import RetrievalQA
+from langchain.chains.retrieval_qa.base import RetrievalQA
+
 
 # 1. 제목 및 설정
 st.title("🧠 나만의 세컨드 브레인 (Pinecone Ver.)")
@@ -24,7 +25,11 @@ index_name = "second-brain" # 파인콘 홈페이지에서 만든 이름과 같�
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 
 # 벡터 저장소 연결
-vectorstore = PineconeVectorStore(index_name=index_name, embedding=embeddings)
+vectorstore = PineconeVectorStore.from_existing_index(
+    index_name=index_name,
+    embedding=embeddings
+)
+
 
 # 4. 사이드바: 기억 입력하기
 with st.sidebar:

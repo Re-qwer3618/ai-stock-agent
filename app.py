@@ -50,7 +50,7 @@ query = st.text_input("무엇이 궁금한가요?")
 if st.button("질문 보내기"):
     if query:
         with st.spinner("기억을 뒤지는 중..."):
-            llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
+            llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
             
             # RAG 체인 생성 (검색 -> 답변)
             qa_chain = RetrievalQA.from_chain_type(

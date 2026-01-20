@@ -1,114 +1,177 @@
 import streamlit as st
 import os
+import FinanceDataReader as fdr  # 주식 데이터 라이브러리
+import datetime
 
-# Pinecone
+# Pinecone & Gemini
 from pinecone import Pinecone
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
-
-# Gemini (직접 REST 사용)
 import google.generativeai as genai
 
+# =========================
+# 1. 설정 및 초기화
+# =========================
+st.set_page_config(page_title="AI 주식 분석 에이전트", layout="wide")
 
-# =========================
-# 1. 제목 및 기본 설정
-# =========================
-st.title("🧠 나만의 AI-agent (Pinecone Ver.)")
-st.caption("분석이 필요한 종목에 대해서 AI가 분석해줍니다.")
+st.title("📈 실시간 AI 주식 분석기 (Hybrid Ver.)")
+st.caption("Pinecone의 '투자 이론'과 실시간 '시장 데이터'를 결합해 분석합니다.")
 
-
-# =========================
-# 2. API 키 설정
-# =========================
+# API 키 확인
 if "GOOGLE_API_KEY" not in st.secrets or "PINECONE_API_KEY" not in st.secrets:
     st.error("API 키가 설정되지 않았습니다. Streamlit Secrets를 확인하세요.")
     st.stop()
 
 os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-
-# Gemini 설정 (REST, 동기)
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-1.5-flash")
-
-# Pinecone 설정
 pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
 
-
-# =========================
-# 3. Pinecone 인덱스 연결
-# =========================
-index_name = "ai-stock-agent"  # 파인콘 콘솔에 실제 존재해야 함
-
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001"
-)
-
-# ⚠️ from_existing_index 사용하지 않음 (오류 원인)
+# Pinecone 연결
+index_name = "ai-stock-agent"
+embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 index = pc.Index(index_name)
-
-vectorstore = PineconeVectorStore(
-    index=index,
-    embedding=embeddings
-)
+vectorstore = PineconeVectorStore(index=index, embedding=embeddings)
 
 
 # =========================
-# 4. 사이드바: 종목 추가
+# 2. 함수: 실시간 주식 데이터 가져오기 (Naver 증권 기반)
+# =========================
+@st.cache_data
+def get_stock_dict():
+    """
+    한국거래소(KRX)의 모든 종목 이름과 코드를 가져와서
+    '이름': '코드' 형태의 전화번호부를 만듭니다.
+    """
+    # KRX 전체 리스트 가져오기 (시간이 조금 걸릴 수 있음)
+    df = fdr.StockListing('KRX')
+    # 이름과 코드를 짝지어서 딕셔너리로 변환 (예: {'삼성전자': '005930', ...})
+    stock_dict = dict(zip(df['Name'], df['Code']))
+    return stock_dict
+
+def get_stock_data(code):
+    """
+    Finance-DataReader를 이용해 특정 종목의 최신 주가 정보를 가져옵니다.
+    """
+    try:
+        # 최근 5일치 데이터만 가져옴 (오늘 날짜 확인용)
+        df = fdr.DataReader(code, '2024') 
+        if df.empty:
+            return None
+        
+        last_row = df.iloc[-1]
+        prev_row = df.iloc[-2] if len(df) > 1 else last_row
+        
+        # 데이터 정리
+        data = {
+            "current_price": int(last_row['Close']),
+            "change_rate": round(((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100, 2),
+            "volume": int(last_row['Volume']),
+            "date": last_row.name.strftime("%Y-%m-%d")
+        }
+        return data
+    except Exception as e:
+        return None
+
+# =========================
+# 3. 사이드바: 지식(교과서) 쌓기
 # =========================
 with st.sidebar:
-    st.header("📝 종목 추가하기")
-    txt_input = st.text_area("분석할 종목 또는 메모를 입력하세요", height=150)
-
-    if st.button("종목 분석 데이터 저장"):
+    st.header("📚 지식 쌓기 (Textbook)")
+    st.info("여기에 '이동평균선 매매법', '가치투자 이론' 등 교과서적인 내용을 저장하세요.")
+    txt_input = st.text_area("투자 이론/메모 입력", height=150)
+    
+    if st.button("지식 저장하기"):
         if txt_input.strip():
+            # 나중에는 여기에 metadata(카테고리 등)도 추가하면 좋습니다.
             vectorstore.add_texts([txt_input])
-            st.success("Pinecone에 성공적으로 저장되었습니다 💾")
+            st.success("AI의 두뇌에 지식이 추가되었습니다! 🧠")
+
+
+# =========================
+# 4. 메인: 실시간 분석 파트
+# =========================
+st.divider()
+col1, col2 = st.columns([1, 2])
+
+# 전화번호부(종목 리스트) 불러오기
+stock_dict = get_stock_dict()
+
+with col1:
+    st.subheader("1. 종목 설정")
+    
+    # 텍스트 입력 대신 '선택 상자(Selectbox)' 사용
+    # 사용자가 이름을 타이핑하면 검색도 됩니다!
+    stock_name = st.selectbox(
+        "종목을 선택하세요", 
+        options=stock_dict.keys(),  # 모든 종목 이름
+        index=list(stock_dict.keys()).index("삼성전자") if "삼성전자" in stock_dict else 0 # 기본값 삼성전자
+    )
+    
+    # 선택한 이름으로 코드 찾기 (자동 변환)
+    stock_code = stock_dict[stock_name] 
+
+    st.write(f"📌 종목코드: {stock_code}") # 확인용으로 작게 표시
+
+    # [검증 포인트] 실시간 데이터 가져오기
+    if stock_code:
+        realtime_data = get_stock_data(stock_code)
+        if realtime_data:
+            st.success(f"✅ {stock_name} 데이터 수신 성공")
+            st.metric(
+                label="현재가", 
+                value=f"{realtime_data['current_price']:,}원", 
+                delta=f"{realtime_data['change_rate']}%"
+            )
         else:
-            st.warning("내용을 입력해주세요.")
+            st.error("데이터를 가져올 수 없습니다.")
 
+with col2:
+    st.subheader("2. AI 심층 분석 요청")
+    query = st.text_input("구체적으로 무엇이 궁금한가요?", "현재 차트 흐름과 매매 전략을 분석해줘")
 
-# =========================
-# 5. 질문하기 (RAG)
-# =========================
-st.header("🔍 질문하기")
-query = st.text_input("무엇이 궁금한가요?")
-
-if st.button("질문 보내기"):
-    if not query.strip():
-        st.warning("질문을 입력해주세요.")
-        st.stop()
-
-    with st.spinner("기억을 검색하고 분석 중입니다..."):
-        # 1️⃣ Pinecone에서 관련 문서 검색
-        docs = vectorstore.similarity_search(query, k=4)
-
-        if not docs:
-            st.warning("참고할 데이터가 없습니다. 먼저 종목을 추가해주세요.")
+    if st.button("🚀 분석 시작"):
+        if not realtime_data:
+            st.warning("먼저 유효한 종목코드를 입력해주세요.")
             st.stop()
+            
+        with st.spinner(f"'{stock_name}'의 데이터를 분석하고 교과서를 뒤적이는 중..."):
+            
+            # 1️⃣ RAG: 질문과 관련된 투자 이론(Textbook) 검색
+            # 예: "매매 전략"이라고 물으면 DB에서 "골든크로스", "손절 기준" 등을 찾아옴
+            docs = vectorstore.similarity_search(query, k=3)
+            textbook_context = "\n".join([doc.page_content for doc in docs]) if docs else "특별한 저장된 이론 없음."
 
-        # 2️⃣ Context 구성
-        context = "\n\n".join([doc.page_content for doc in docs])
+            # 2️⃣ Prompt Engineering: [실시간 데이터] + [투자 이론] 결합
+            prompt = f"""
+당신은 '수석 주식 애널리스트'입니다. 아래 제공된 [실시간 시장 데이터]와 [투자 이론(Textbook)]을 종합하여 분석 보고서를 작성하세요.
 
-        prompt = f"""
-너는 주식 분석 AI 에이전트다.
-아래의 정보를 참고해서 질문에 대해 명확하고 간결하게 답변해라.
+### 1. 분석 대상
+- 종목명: {stock_name} ({stock_code})
+- 기준일: {realtime_data['date']}
 
-[참고 정보]
-{context}
+### 2. 실시간 시장 데이터 (Fact)
+- 현재가: {realtime_data['current_price']:,}원
+- 전일 대비 등락률: {realtime_data['change_rate']}%
+- 거래량: {realtime_data['volume']:,}주
 
-[질문]
-{query}
+### 3. 참고할 투자 이론 (Knowledge Base)
+{textbook_context}
+
+### 4. 사용자 질문
+"{query}"
+
+### 5. 답변 작성 가이드
+- **구조:** [시장 현황 요약] -> [이론적 분석] -> [리스크 요인] -> [최종 결론] 순으로 작성.
+- **톤앤매너:** 전문적이지만 이해하기 쉽게(초등학생도 이해 가능하게).
+- **필수:** 투자의견(매수/매도/관망)을 낼 때는 반드시 위 [투자 이론]이나 [시장 데이터]를 근거로 들 것.
 """
-
-        # 3️⃣ Gemini 호출 (동기 / REST)
-        response = gemini_model.generate_content(prompt)
-
-        # =========================
-        # 6. 결과 출력
-        # =========================
-        st.subheader("🤖 AI의 답변")
-        st.write(response.text)
-
-        with st.expander("📚 참고한 소스 보기"):
-            for i, doc in enumerate(docs, start=1):
-                st.write(f"{i}. {doc.page_content}")
+            # 3️⃣ Gemini 호출
+            response = gemini_model.generate_content(prompt)
+            
+            # 4️⃣ 결과 출력
+            st.markdown(response.text)
+            
+            # (옵션) 참고한 이론 보여주기
+            with st.expander("📚 분석에 참고한 '투자 교과서' 내용 보기"):
+                st.write(textbook_context)

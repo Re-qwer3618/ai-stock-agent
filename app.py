@@ -132,6 +132,13 @@ vectorstore = PineconeVectorStore.from_existing_index(
     embedding=embeddings
 )
 
+# [디버깅] 인덱스 상태 확인
+try:
+    index = pc.Index(index_name)
+    stats = index.describe_index_stats()
+    st.sidebar.success(f"✅ Pinecone 연결 성공: {stats.get('total_vector_count', 0)}개 벡터")
+except Exception as e:
+    st.sidebar.error(f"❌ Pinecone 연결 실패: {e}")
 
 # =========================
 # 4. 메인: 실시간 분석 파트
@@ -188,8 +195,8 @@ with col2:
             
             # 1️⃣ RAG: 질문과 관련된 투자 이론(Textbook) 검색
             # 예: "매매 전략"이라고 물으면 DB에서 "골든크로스", "손절 기준" 등을 찾아옴
-            filter_criteria = {"namespace_field": "your_namespace_value"}
-            docs = vectorstore.similarity_search(query, k=3, filter=filter_criteria)
+            
+            docs = vectorstore.similarity_search(query, k=3,)
             textbook_context = "\n".join([doc.page_content for doc in docs]) if docs else "특별한 저장된 이론 없음."
 
             # 2️⃣ Prompt Engineering: [실시간 데이터] + [투자 이론] 결합

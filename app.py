@@ -24,7 +24,7 @@ if "GOOGLE_API_KEY" not in st.secrets or "PINECONE_API_KEY" not in st.secrets:
 
 os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
 
 # =========================

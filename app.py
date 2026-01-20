@@ -1,264 +1,200 @@
 import streamlit as st
 import os
-import FinanceDataReader as fdr  # 주식 데이터 라이브러리
 import datetime
+import FinanceDataReader as fdr  # 주식 데이터 라이브러리
+import plotly.graph_objects as go  # 멋진 차트 그리는 도구
 
-# Pinecone & Gemini
+# Pinecone & Gemini 관련 라이브러리
 from pinecone import Pinecone
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
-import plotly.graph_objects as go  # 멋진 차트 그리는 도구
 
-# =========================
-# 1. 설정 및 초기화
-# =========================
+# ==========================================
+# 1. 페이지 설정 및 초기화
+# ==========================================
 st.set_page_config(page_title="AI 주식 분석 에이전트", layout="wide")
 
-st.title("📈 실시간 AI 주식 분석기 (Hybrid Ver.)")
-st.caption("Pinecone의 '투자 이론'과 실시간 '시장 데이터'를 결합해 분석합니다.")
+st.title("📈 실시간 AI 주식 분석기 (Pro Ver.)")
+st.caption("당신의 Pinecone DB(투자 전략)와 실시간 시장 데이터를 결합해 분석합니다.")
 
 # ---------------------------------------------------------
-# [수정된 부분] 사용자에게 API 키 직접 입력받기
+# [핵심] 1. 사용자 로그인 (Google API Key 입력) - 비용 절감용
 # ---------------------------------------------------------
 with st.sidebar:
     st.header("🔐 로그인")
     user_api_key = st.text_input(
         "Google API Key를 입력하세요", 
-        type="password",  # 입력할 때 글자가 가려짐 (****)
-        help="https://aistudio.google.com/ 에서 키를 발급받을 수 있습니다."
+        type="password", 
+        help="https://aistudio.google.com/ 에서 무료로 발급 가능합니다."
     )
     st.markdown("---")
+    st.info("💡 Pinecone DB는 개발자가 제공합니다.")
 
-# 키가 없으면 경고 메시지를 띄우고 여기서 멈춤!
+# 키가 없으면 여기서 멈춤 (앱 보호)
 if not user_api_key:
-    st.warning("👈 왼쪽 사이드바에 Google API Key를 입력해야 작동합니다.")
-    st.stop()  # 프로그램 실행 중단
-
-# 사용자가 입력한 키로 설정
-genai.configure(api_key=user_api_key)
-# ---------------------------------------------------------
-
-# Pinecone 키는 사장님(개발자) 것을 써야 함! (DB는 사장님 거니까)
-if "PINECONE_API_KEY" not in st.secrets:
-    st.error("Pinecone API 키가 설정되지 않았습니다. Secrets를 확인하세요.")
+    st.warning("👈 왼쪽 사이드바에 Google API Key를 입력해주세요.")
     st.stop()
 
-# 모델과 Pinecone 준비
-gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"]) # 이건 비밀 수첩에서 가져옴
+# ---------------------------------------------------------
+# [핵심] 2. 환경 설정 (Google은 사용자 키, Pinecone은 개발자 키)
+# ---------------------------------------------------------
+# 1) Google 설정
+os.environ["GOOGLE_API_KEY"] = user_api_key # 랭체인을 위해 환경변수 설정
+genai.configure(api_key=user_api_key)       # 제미나이 설정
 
-# =========================
-# 2. 함수: 실시간 주식 데이터 가져오기 (Naver 증권 기반)
-# =========================
+# 2) Pinecone 설정 (secrets.toml에서 가져옴)
+if "PINECONE_API_KEY" not in st.secrets:
+    st.error("설정 오류: Pinecone API 키가 secrets.toml에 없습니다.")
+    st.stop()
+
+# ==========================================
+# 3. 모델 및 DB 연결 준비
+# ==========================================
+# (1) Gemini 모델 준비
+gemini_model = genai.GenerativeModel("gemini-2.0-flash")
+
+# (2) Pinecone 연결
+index_name = "ai-stock-agent"
+pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
+embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+
+pinecone_index = None
+try:
+    pinecone_index = pc.Index(index_name)
+    # 연결 확인용 (사이드바에 표시)
+    stats = pinecone_index.describe_index_stats()
+    st.sidebar.success(f"✅ DB 연결됨 ({stats.get('total_vector_count', 0)}개 데이터)")
+except Exception as e:
+    st.sidebar.error(f"❌ DB 연결 실패: {e}")
+
+# ==========================================
+# 4. 기능 함수 정의 (캐싱 & 데이터 수집)
+# ==========================================
+
+# [중요] 똑똑한 비서 함수 (캐싱 적용: 10분간 기억)
+@st.cache_data(ttl=600)
+def ask_gemini(prompt_text):
+    """Gemini에게 질문을 던지고 답변을 받아오는 함수 (비용 절감)"""
+    try:
+        response = gemini_model.generate_content(prompt_text)
+        return response.text
+    except Exception as e:
+        return f"AI 분석 중 오류 발생: {e}"
+
 @st.cache_data
 def get_stock_dict():
-    """
-    한국거래소(KRX)의 모든 종목 이름과 코드를 가져와서
-    '이름': '코드' 형태의 전화번호부를 만듭니다.
-    """
-    # KRX 전체 리스트 가져오기 (시간이 조금 걸릴 수 있음)
+    """KRX 종목 리스트 가져오기"""
     df = fdr.StockListing('KRX')
-    # 이름과 코드를 짝지어서 딕셔너리로 변환 (예: {'삼성전자': '005930', ...})
     stock_dict = dict(zip(df['Name'], df['Code']))
     return stock_dict
 
 def get_stock_data(code):
-    """
-    Finance-DataReader를 이용해 특정 종목의 최신 주가 정보를 가져옵니다.
-    """
+    """특정 종목의 최신 주가 정보 가져오기"""
     try:
-        # 최근 5일치 데이터만 가져옴 (오늘 날짜 확인용)
         df = fdr.DataReader(code, '2024') 
-        if df.empty:
-            return None
+        if df.empty: return None
         
         last_row = df.iloc[-1]
         prev_row = df.iloc[-2] if len(df) > 1 else last_row
         
-        # 데이터 정리
-        data = {
+        return {
             "current_price": int(last_row['Close']),
             "change_rate": round(((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100, 2),
             "volume": int(last_row['Volume']),
             "date": last_row.name.strftime("%Y-%m-%d")
         }
-        return data
-    except Exception as e:
+    except:
         return None
 
 def plot_chart(code, name):
-    """
-    1년치 주가 데이터를 가져와서 캔들 차트(봉차트)를 그립니다.
-    """
+    """캔들 차트 그리기"""
     try:
-        # 1년치 데이터 가져오기 (오늘부터 365일 전까지)
         start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
         df = fdr.DataReader(code, start_date)
-        
-        if df.empty:
-            st.error("차트 데이터를 불러올 수 없습니다.")
-            return
+        if df.empty: return
 
-        # 차트 그리기 (Candlestick)
         fig = go.Figure(data=[go.Candlestick(
-            x=df.index,
-            open=df['Open'],
-            high=df['High'],
-            low=df['Low'],
-            close=df['Close'],
-            increasing_line_color='red',  # 상승은 빨강
-            decreasing_line_color='blue'  # 하락은 파랑
+            x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
+            increasing_line_color='red', decreasing_line_color='blue'
         )])
-
-        # 차트 꾸미기 (제목, 크기 등)
-        fig.update_layout(
-            title=f"{name} ({code}) 일봉 차트",
-            xaxis_title="날짜",
-            yaxis_title="주가",
-            height=400,
-            margin=dict(l=20, r=20, t=50, b=20)
-        )
-        
-        # Streamlit에 차트 출력
+        fig.update_layout(title=f"{name} ({code}) 일봉 차트", height=400, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
-        
-    except Exception as e:
-        st.error(f"차트 생성 중 오류 발생: {e}")
+    except:
+        st.error("차트 로딩 실패")
 
-# =========================
-# 3. Pinecone 인덱스 연결
-# =========================
-index_name = "ai-stock-agent"
-
-# API 키를 환경변수에 등록
-os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
-
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001"
-)
-
-# Pinecone 연결 (디버깅 정보 추가)
-pinecone_index = None
-try:
-    pinecone_index = pc.Index(index_name)
-    stats = pinecone_index.describe_index_stats()
-    st.sidebar.success(f"✅ Pinecone 연결 성공: {stats.get('total_vector_count', 0)}개 벡터")
-except Exception as e:
-    st.sidebar.error(f"❌ Pinecone 연결 실패: {e}")
-
-# =========================
-# 4. 메인: 실시간 분석 파트
-# =========================
+# ==========================================
+# 5. 메인 화면 구성
+# ==========================================
 st.divider()
 col1, col2 = st.columns([1, 2])
 
-# 전화번호부(종목 리스트) 불러오기
+# (1) 종목 선택 영역
 stock_dict = get_stock_dict()
-
 with col1:
-    st.subheader("1. 종목 설정")
-    
-    # 텍스트 입력 대신 '선택 상자(Selectbox)' 사용
-    stock_name = st.selectbox(
-        "종목을 선택하세요", 
-        options=stock_dict.keys(),
-        index=list(stock_dict.keys()).index("삼성전자") if "삼성전자" in stock_dict else 0
-    )
-    
-    # 선택한 이름으로 코드 찾기 (자동 변환)
-    stock_code = stock_dict[stock_name] 
+    st.subheader("1. 종목 선택")
+    stock_name = st.selectbox("분석할 종목", options=stock_dict.keys(), index=list(stock_dict.keys()).index("삼성전자") if "삼성전자" in stock_dict else 0)
+    stock_code = stock_dict[stock_name]
 
-    st.write(f"📌 종목코드: {stock_code}")
+    realtime_data = get_stock_data(stock_code)
+    if realtime_data:
+        st.metric(label="현재가", value=f"{realtime_data['current_price']:,}원", delta=f"{realtime_data['change_rate']}%")
+        plot_chart(stock_code, stock_name)
+    else:
+        st.error("데이터 수신 실패")
 
-    # 실시간 데이터 가져오기
-    realtime_data = None
-    if stock_code:
-        realtime_data = get_stock_data(stock_code)
-        if realtime_data:
-            st.success(f"✅ {stock_name} 데이터 수신 성공")
-            st.metric(
-                label="현재가", 
-                value=f"{realtime_data['current_price']:,}원", 
-                delta=f"{realtime_data['change_rate']}%"
-            )
-
-            # 차트 그리기 추가
-            with st.expander("📊 1년 주가 차트 보기 (클릭)", expanded=True):
-                plot_chart(stock_code, stock_name)
-        else:
-            st.error("데이터를 가져올 수 없습니다.")
-
+# (2) AI 분석 영역
 with col2:
-    st.subheader("2. AI 심층 분석 요청")
-    query = st.text_input("구체적으로 무엇이 궁금한가요?", "현재 차트 흐름과 매매 전략을 분석해줘")
+    st.subheader("2. AI 전략 분석")
+    query = st.text_input("궁금한 점을 물어보세요", "현재 차트 흐름과 보유한 전략을 기반으로 매매 의견 줘")
 
-    if st.button("🚀 분석 시작"):
+    if st.button("🚀 AI 분석 실행"):
         if not realtime_data:
-            st.warning("먼저 유효한 종목을 선택해주세요.")
+            st.warning("종목 데이터가 없습니다.")
             st.stop()
             
-        with st.spinner(f"'{stock_name}'의 데이터를 분석하고 교과서를 뒤적이는 중..."):
+        with st.spinner(f"Pinecone DB에서 전략을 검색하고 분석 중입니다..."):
             
-            # 1️⃣ RAG: 질문과 관련된 투자 이론(Textbook) 검색
-            textbook_context = "특별한 저장된 이론 없음."
-            
+            # 1️⃣ RAG: Pinecone에서 관련 전략/지식 검색
+            rag_context = "관련된 저장된 전략 없음."
             if pinecone_index:
                 try:
-                    # 쿼리를 임베딩으로 변환 (리스트로 변환)
+                    # 질문을 벡터로 변환
                     query_embedding = embeddings.embed_query(query)
-                    
-                    # Pinecone에 직접 쿼리 (벡터를 리스트로 변환)
+                    # Pinecone 검색 (Top 3)
                     results = pinecone_index.query(
-                        vector=list(query_embedding),  # 여기가 핵심!
+                        vector=query_embedding,
                         top_k=3,
                         include_metadata=True
                     )
-                    
-                    # 결과에서 텍스트 추출
-                    texts = []
-                    for match in results.get('matches', []):
-                        metadata = match.get('metadata', {})
-                        if 'text' in metadata:
-                            texts.append(metadata['text'])
-                    
+                    # 검색된 내용 합치기
+                    texts = [match['metadata']['text'] for match in results.get('matches', []) if 'text' in match['metadata']]
                     if texts:
-                        textbook_context = "\n\n".join(texts)
-                    
+                        rag_context = "\n\n".join(texts)
                 except Exception as e:
-                    st.warning(f"투자 이론 검색 중 오류 발생: {e}")
-                    textbook_context = "투자 이론을 불러올 수 없습니다. 실시간 데이터만으로 분석합니다."
+                    st.warning(f"DB 검색 중 오류: {e}")
 
-            # 2️⃣ Prompt Engineering: [실시간 데이터] + [투자 이론] 결합
-            prompt = f"""당신은 '수석 주식 애널리스트'입니다. 아래 제공된 [실시간 시장 데이터]와 [투자 이론(Textbook)]을 종합하여 분석 보고서를 작성하세요.
+            # 2️⃣ 프롬프트 작성
+            prompt = f"""당신은 퀀트 투자 전문가입니다. 아래 데이터를 바탕으로 분석하세요.
 
-### 1. 분석 대상
-- 종목명: {stock_name} ({stock_code})
-- 기준일: {realtime_data['date']}
+[분석 대상] {stock_name} ({stock_code}), 기준일: {realtime_data['date']}
+[시장 데이터] 현재가: {realtime_data['current_price']}원, 등락률: {realtime_data['change_rate']}%, 거래량: {realtime_data['volume']}
 
-### 2. 실시간 시장 데이터 (Fact)
-- 현재가: {realtime_data['current_price']:,}원
-- 전일 대비 등락률: {realtime_data['change_rate']}%
-- 거래량: {realtime_data['volume']:,}주
+[참고 전략 및 지식 (DB 검색 결과)]
+{rag_context}
 
-### 3. 참고할 투자 이론 (Knowledge Base)
-{textbook_context}
-
-### 4. 사용자 질문
+[사용자 질문]
 "{query}"
 
-### 5. 답변 작성 가이드
-- **구조:** [시장 현황 요약] -> [이론적 분석] -> [리스크 요인] -> [최종 결론] 순으로 작성.
-- **톤앤매너:** 전문적이지만 이해하기 쉽게(초등학생도 이해 가능하게).
-- **필수:** 투자의견(매수/매도/관망)을 낼 때는 반드시 위 [투자 이론]이나 [시장 데이터]를 근거로 들 것.
+[답변 가이드]
+1. 시장 현황을 간단히 요약할 것.
+2. 위 [참고 전략]에 나온 내용과 현재 차트 상황을 연결해서 분석할 것. (전략이 없으면 일반적인 기술적 분석 수행)
+3. 구체적인 매매 근거를 댈 것.
+4. 초등학생도 이해할 수 있게 쉽고 명확하게 설명할 것.
 """
-            # 3️⃣ Gemini 호출 (에러 처리 추가)
-            try:
-                result_text = ask_gemini(prompt) # 👈 비서(ask_gemini)에게 다녀오라고 시킴!
-                st.markdown(result_text)
-            except Exception as e:
-                st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
-                st.info("API 키나 네트워크 연결을 확인해주세요.")
+            # 3️⃣ AI 호출 (캐싱된 함수 사용)
+            result_text = ask_gemini(prompt)
+            st.markdown(result_text)
             
-            # (옵션) 참고한 이론 보여주기
-            with st.expander("📚 분석에 참고한 '투자 교과서' 내용 보기"):
-                st.write(textbook_context)
+            # (선택) 참고한 자료 보여주기
+            with st.expander("📚 참고한 DB 전략 보기"):
+                st.write(rag_context)

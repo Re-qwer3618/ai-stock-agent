@@ -4,4 +4,5 @@ langchain==0.1.16
 langchain-pinecone>=0.1.0
 pinecone-client>=3.1.0
 python-dotenv
-finance-datareader
+finance-datareader  # <--- 이거 추가!
+plotly              # <--- 차트 그리기용 (선택)

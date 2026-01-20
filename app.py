@@ -8,6 +8,7 @@ from pinecone import Pinecone
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 import google.generativeai as genai
+import plotly.graph_objects as go  # 멋진 차트 그리는 도구
 
 # =========================
 # 1. 설정 및 초기화
@@ -72,6 +73,44 @@ def get_stock_data(code):
         return data
     except Exception as e:
         return None
+def plot_chart(code, name):
+    """
+    1년치 주가 데이터를 가져와서 캔들 차트(봉차트)를 그립니다.
+    """
+    try:
+        # 1년치 데이터 가져오기 (오늘부터 365일 전까지)
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+        df = fdr.DataReader(code, start_date)
+        
+        if df.empty:
+            st.error("차트 데이터를 불러올 수 없습니다.")
+            return
+
+        # 차트 그리기 (Candlestick)
+        fig = go.Figure(data=[go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            increasing_line_color='red',  # 상승은 빨강
+            decreasing_line_color='blue'  # 하락은 파랑
+        )])
+
+        # 차트 꾸미기 (제목, 크기 등)
+        fig.update_layout(
+            title=f"{name} ({code}) 일봉 차트",
+            xaxis_title="날짜",
+            yaxis_title="주가",
+            height=400,
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
+        
+        # Streamlit에 차트 출력
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"차트 생성 중 오류 발생: {e}")
 
 # =========================
 # 3. Pinecone 인덱스 연결 (수정됨)

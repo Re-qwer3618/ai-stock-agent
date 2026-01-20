@@ -74,18 +74,24 @@ def get_stock_data(code):
         return None
 
 # =========================
-# 3. 사이드바: 지식(교과서) 쌓기
+# 3. Pinecone 인덱스 연결 (수정됨)
 # =========================
-with st.sidebar:
-    st.header("📚 지식 쌓기 (Textbook)")
-    st.info("여기에 '이동평균선 매매법', '가치투자 이론' 등 교과서적인 내용을 저장하세요.")
-    txt_input = st.text_area("투자 이론/메모 입력", height=150)
-    
-    if st.button("지식 저장하기"):
-        if txt_input.strip():
-            # 나중에는 여기에 metadata(카테고리 등)도 추가하면 좋습니다.
-            vectorstore.add_texts([txt_input])
-            st.success("AI의 두뇌에 지식이 추가되었습니다! 🧠")
+index_name = "ai-stock-agent"
+
+embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/embedding-001"
+)
+
+# [수정 포인트 1] 환경 변수에 Pinecone API 키 강제 등록
+# (LangChain이 내부적으로 이 환경 변수를 찾아서 사용합니다)
+os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
+
+# [수정 포인트 2] index 객체를 직접 만들지 말고, from_existing_index 사용
+# 이렇게 하면 LangChain이 알아서 가장 안전한 방법으로 연결합니다.
+vectorstore = PineconeVectorStore.from_existing_index(
+    index_name=index_name,
+    embedding=embeddings
+)
 
 
 # =========================

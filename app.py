@@ -27,6 +27,12 @@ genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
 
+@st.cache_data(ttl=600)  # 600초(10분) 동안 기억력이 유지됨
+def ask_gemini(prompt_text):
+    # 비서가 대신 Gemini에게 물어보고 대답을 받아옴
+    response = gemini_model.generate_content(prompt_text)
+    return response.text
+
 # =========================
 # 2. 함수: 실시간 주식 데이터 가져오기 (Naver 증권 기반)
 # =========================
@@ -233,8 +239,8 @@ with col2:
 """
             # 3️⃣ Gemini 호출 (에러 처리 추가)
             try:
-                response = gemini_model.generate_content(prompt)
-                st.markdown(response.text)
+                result_text = ask_gemini(prompt) # 👈 비서(ask_gemini)에게 다녀오라고 시킴!
+                st.markdown(result_text)
             except Exception as e:
                 st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
                 st.info("API 키나 네트워크 연결을 확인해주세요.")

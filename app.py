@@ -92,7 +92,6 @@ vectorstore = PineconeVectorStore.from_existing_index(
     index_name=index_name,
     embedding=embeddings
 )
-)
 
 
 # =========================

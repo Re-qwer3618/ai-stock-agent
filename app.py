@@ -188,7 +188,8 @@ with col2:
             
             # 1️⃣ RAG: 질문과 관련된 투자 이론(Textbook) 검색
             # 예: "매매 전략"이라고 물으면 DB에서 "골든크로스", "손절 기준" 등을 찾아옴
-            docs = vectorstore.similarity_search(query, k=3, namespace="")
+            filter_criteria = {"namespace_field": "your_namespace_value"}
+            docs = vectorstore.similarity_search(query, k=3, filter=filter_criteria)
             textbook_context = "\n".join([doc.page_content for doc in docs]) if docs else "특별한 저장된 이론 없음."
 
             # 2️⃣ Prompt Engineering: [실시간 데이터] + [투자 이론] 결합

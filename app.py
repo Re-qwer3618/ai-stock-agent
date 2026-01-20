@@ -9,6 +9,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 import google.generativeai as genai
 import plotly.graph_objects as go  # 멋진 차트 그리는 도구
+from langchain.schema import Document  # Document 클래스 임포트 추가
 
 # =========================
 # 1. 설정 및 초기화
@@ -27,13 +28,6 @@ os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
-
-# Pinecone 연결
-index_name = "ai-stock-agent"
-embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-#index = pc.Index(index_name)
-#vectorstore = PineconeVectorStore(index=index, embedding=embeddings)
-
 
 # =========================
 # 2. 함수: 실시간 주식 데이터 가져오기 (Naver 증권 기반)
@@ -73,6 +67,7 @@ def get_stock_data(code):
         return data
     except Exception as e:
         return None
+
 def plot_chart(code, name):
     """
     1년치 주가 데이터를 가져와서 캔들 차트(봉차트)를 그립니다.
@@ -113,32 +108,31 @@ def plot_chart(code, name):
         st.error(f"차트 생성 중 오류 발생: {e}")
 
 # =========================
-# 3. Pinecone 인덱스 연결 (수정됨)
+# 3. Pinecone 인덱스 연결
 # =========================
 index_name = "ai-stock-agent"
 
-# [중요] API 키를 환경변수에 등록해야 LangChain이 알아서 가져갑니다.
+# API 키를 환경변수에 등록
 os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
 
 embeddings = GoogleGenerativeAIEmbeddings(
     model="models/embedding-001"
 )
 
-# [핵심 수정] 
-# pc.Index()를 사용하지 않습니다. 
-# index_name(문자열)만 넘겨주면 라이브러리가 알아서 최적의 연결 방식을 찾습니다.
-vectorstore = PineconeVectorStore.from_existing_index(
-    index_name=index_name,
-    embedding=embeddings
-)
-
-# [디버깅] 인덱스 상태 확인
+# Pinecone 연결 (디버깅 정보 추가)
 try:
+    vectorstore = PineconeVectorStore.from_existing_index(
+        index_name=index_name,
+        embedding=embeddings
+    )
+    
+    # 디버깅: 인덱스 상태 확인
     index = pc.Index(index_name)
     stats = index.describe_index_stats()
     st.sidebar.success(f"✅ Pinecone 연결 성공: {stats.get('total_vector_count', 0)}개 벡터")
 except Exception as e:
     st.sidebar.error(f"❌ Pinecone 연결 실패: {e}")
+    vectorstore = None
 
 # =========================
 # 4. 메인: 실시간 분석 파트
@@ -153,19 +147,19 @@ with col1:
     st.subheader("1. 종목 설정")
     
     # 텍스트 입력 대신 '선택 상자(Selectbox)' 사용
-    # 사용자가 이름을 타이핑하면 검색도 됩니다!
     stock_name = st.selectbox(
         "종목을 선택하세요", 
-        options=stock_dict.keys(),  # 모든 종목 이름
-        index=list(stock_dict.keys()).index("삼성전자") if "삼성전자" in stock_dict else 0 # 기본값 삼성전자
+        options=stock_dict.keys(),
+        index=list(stock_dict.keys()).index("삼성전자") if "삼성전자" in stock_dict else 0
     )
     
     # 선택한 이름으로 코드 찾기 (자동 변환)
     stock_code = stock_dict[stock_name] 
 
-    st.write(f"📌 종목코드: {stock_code}") # 확인용으로 작게 표시
+    st.write(f"📌 종목코드: {stock_code}")
 
-    # [검증 포인트] 실시간 데이터 가져오기
+    # 실시간 데이터 가져오기
+    realtime_data = None
     if stock_code:
         realtime_data = get_stock_data(stock_code)
         if realtime_data:
@@ -176,7 +170,7 @@ with col1:
                 delta=f"{realtime_data['change_rate']}%"
             )
 
-            # 🔥 [여기!] 차트 그리기 추가
+            # 차트 그리기 추가
             with st.expander("📊 1년 주가 차트 보기 (클릭)", expanded=True):
                 plot_chart(stock_code, stock_name)
         else:
@@ -193,11 +187,34 @@ with col2:
             
         with st.spinner(f"'{stock_name}'의 데이터를 분석하고 교과서를 뒤적이는 중..."):
             
-            # 1️⃣ RAG: 질문과 관련된 투자 이론(Textbook) 검색
-            # 예: "매매 전략"이라고 물으면 DB에서 "골든크로스", "손절 기준" 등을 찾아옴
-            
-            docs = vectorstore.similarity_search(query, k=3,)
-            textbook_context = "\n".join([doc.page_content for doc in docs]) if docs else "특별한 저장된 이론 없음."
+            # 1️⃣ RAG: 질문과 관련된 투자 이론(Textbook) 검색 (수정된 부분)
+            try:
+                # 쿼리를 임베딩으로 변환
+                query_embedding = embeddings.embed_query(query)
+                
+                # Pinecone에 직접 쿼리
+                index = pc.Index(index_name)
+                results = index.query(
+                    vector=query_embedding,
+                    top_k=3,
+                    include_metadata=True,
+                    namespace=""  # 기본 namespace 사용
+                )
+                
+                # 결과를 LangChain Document 형식으로 변환
+                docs = [
+                    Document(
+                        page_content=match.get('metadata', {}).get('text', ''),
+                        metadata=match.get('metadata', {})
+                    )
+                    for match in results.get('matches', [])
+                ]
+                
+                textbook_context = "\n".join([doc.page_content for doc in docs]) if docs else "특별한 저장된 이론 없음."
+                
+            except Exception as e:
+                st.warning(f"투자 이론 검색 중 오류 발생: {e}")
+                textbook_context = "투자 이론을 불러올 수 없습니다. 실시간 데이터만으로 분석합니다."
 
             # 2️⃣ Prompt Engineering: [실시간 데이터] + [투자 이론] 결합
             prompt = f"""

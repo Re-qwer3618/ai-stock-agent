@@ -17,21 +17,35 @@ st.set_page_config(page_title="AI 주식 분석 에이전트", layout="wide")
 st.title("📈 실시간 AI 주식 분석기 (Hybrid Ver.)")
 st.caption("Pinecone의 '투자 이론'과 실시간 '시장 데이터'를 결합해 분석합니다.")
 
-# API 키 확인
-if "GOOGLE_API_KEY" not in st.secrets or "PINECONE_API_KEY" not in st.secrets:
-    st.error("API 키가 설정되지 않았습니다. Streamlit Secrets를 확인하세요.")
+# ---------------------------------------------------------
+# [수정된 부분] 사용자에게 API 키 직접 입력받기
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("🔐 로그인")
+    user_api_key = st.text_input(
+        "Google API Key를 입력하세요", 
+        type="password",  # 입력할 때 글자가 가려짐 (****)
+        help="https://aistudio.google.com/ 에서 키를 발급받을 수 있습니다."
+    )
+    st.markdown("---")
+
+# 키가 없으면 경고 메시지를 띄우고 여기서 멈춤!
+if not user_api_key:
+    st.warning("👈 왼쪽 사이드바에 Google API Key를 입력해야 작동합니다.")
+    st.stop()  # 프로그램 실행 중단
+
+# 사용자가 입력한 키로 설정
+genai.configure(api_key=user_api_key)
+# ---------------------------------------------------------
+
+# Pinecone 키는 사장님(개발자) 것을 써야 함! (DB는 사장님 거니까)
+if "PINECONE_API_KEY" not in st.secrets:
+    st.error("Pinecone API 키가 설정되지 않았습니다. Secrets를 확인하세요.")
     st.stop()
 
-os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+# 모델과 Pinecone 준비
 gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
-
-@st.cache_data(ttl=600)  # 600초(10분) 동안 기억력이 유지됨
-def ask_gemini(prompt_text):
-    # 비서가 대신 Gemini에게 물어보고 대답을 받아옴
-    response = gemini_model.generate_content(prompt_text)
-    return response.text
+pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"]) # 이건 비밀 수첩에서 가져옴
 
 # =========================
 # 2. 함수: 실시간 주식 데이터 가져오기 (Naver 증권 기반)

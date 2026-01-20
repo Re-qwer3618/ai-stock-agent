@@ -78,19 +78,20 @@ def get_stock_data(code):
 # =========================
 index_name = "ai-stock-agent"
 
+# [중요] API 키를 환경변수에 등록해야 LangChain이 알아서 가져갑니다.
+os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
+
 embeddings = GoogleGenerativeAIEmbeddings(
     model="models/embedding-001"
 )
 
-# [수정 포인트 1] 환경 변수에 Pinecone API 키 강제 등록
-# (LangChain이 내부적으로 이 환경 변수를 찾아서 사용합니다)
-os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
-
-# [수정 포인트 2] index 객체를 직접 만들지 말고, from_existing_index 사용
-# 이렇게 하면 LangChain이 알아서 가장 안전한 방법으로 연결합니다.
+# [핵심 수정] 
+# pc.Index()를 사용하지 않습니다. 
+# index_name(문자열)만 넘겨주면 라이브러리가 알아서 최적의 연결 방식을 찾습니다.
 vectorstore = PineconeVectorStore.from_existing_index(
     index_name=index_name,
     embedding=embeddings
+)
 )
 
 

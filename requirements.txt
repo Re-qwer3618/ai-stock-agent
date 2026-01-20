@@ -1,0 +1,7 @@
+streamlit
+google-generativeai
+langchain-google-genai
+langchain-pinecone
+pinecone-client
+python-dotenv
+langchain-community

@@ -31,8 +31,8 @@ pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
 # Pinecone 연결
 index_name = "ai-stock-agent"
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-index = pc.Index(index_name)
-vectorstore = PineconeVectorStore(index=index, embedding=embeddings)
+#index = pc.Index(index_name)
+#vectorstore = PineconeVectorStore(index=index, embedding=embeddings)
 
 
 # =========================
